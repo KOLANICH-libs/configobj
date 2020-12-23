@@ -131,6 +131,7 @@ OPTION_DEFAULTS = {
     'default_encoding': None,
     'unrepr': False,
     'write_empty_values': False,
+    'invalid': False
 }
 
 # this could be replaced if six is used for compatibility, or there are no
@@ -478,6 +479,7 @@ class Section(dict):
         self.default_values = {}
         self.extra_values = []
         self._created = False
+        self.source_map = {}
 
 
     def _interpolate(self, key, value):
@@ -520,7 +522,7 @@ class Section(dict):
         return val
 
 
-    def __setitem__(self, key, value, unrepr=False):
+    def __setitem__(self, key, value, unrepr=False, line_range=None):
         """
         Correctly set a value.
 
@@ -577,7 +579,8 @@ class Section(dict):
                 else:
                     raise TypeError('Value is not a string "%s".' % value)
             dict.__setitem__(self, key, value)
-
+            if line_range:
+                self.source_map[key] = line_range
 
     def __delitem__(self, key):
         """Remove items from the sequence when deleting."""
@@ -588,6 +591,8 @@ class Section(dict):
             self.sections.remove(key)
         del self.comments[key]
         del self.inline_comments[key]
+        if key in self.source_map:
+            del self.source_map[key]
 
 
     def get(self, key, default=None):
@@ -1029,6 +1034,7 @@ class Section(dict):
             self[section].restore_defaults()
 
 
+
 def _get_triple_quote(value):
     """Helper for triple-quoting round-trips."""
     if ('"""' in value) and ("'''" in value):
@@ -1151,7 +1157,7 @@ class ConfigObj(Section):
                  interpolation=True, raise_errors=False, list_values=True,
                  create_empty=False, file_error=False, stringify=True,
                  indent_type=None, default_encoding=None, unrepr=False,
-                 write_empty_values=False, _inspec=False):
+                 write_empty_values=False, invalid=False, _inspec=False):
         """
         Parse a config file or create a config file object.
 
@@ -1173,7 +1179,7 @@ class ConfigObj(Section):
                     'create_empty': create_empty, 'file_error': file_error,
                     'stringify': stringify, 'indent_type': indent_type,
                     'default_encoding': default_encoding, 'unrepr': unrepr,
-                    'write_empty_values': write_empty_values}
+                    'write_empty_values': write_empty_values, 'invalid':invalid}
 
         if options is None:
             options = _options
@@ -1328,6 +1334,7 @@ class ConfigObj(Section):
         self.BOM = False
         self.newlines = None
         self.write_empty_values = options['write_empty_values']
+        self.invalid = options['invalid']
         self.unrepr = options['unrepr']
 
         self.initial_comment = []
@@ -1602,10 +1609,12 @@ class ConfigObj(Section):
             # it's not a section marker,
             # so it should be a valid ``key = value`` line
             mat = self._keyword.match(line)
+            start_line = cur_index
             if mat is None:
-                self._handle_error(
-                    'Invalid line ({!r}) (matched as neither section nor keyword)'.format(line),
-                    ParseError, infile, cur_index)
+                if not self.invalid:
+                    self._handle_error(
+                        'Invalid line ({!r}) (matched as neither section nor keyword)'.format(line),
+                        ParseError, infile, cur_index)
             else:
                 # is a keyword value
                 # value will include any inline comment
@@ -1665,7 +1674,7 @@ class ConfigObj(Section):
                 # add the key.
                 # we set unrepr because if we have got this far we will never
                 # be creating a new section
-                this_section.__setitem__(key, value, unrepr=True)
+                this_section.__setitem__(key, value, unrepr=True, line_range=(start_line, cur_index))
                 this_section.inline_comments[key] = comment
                 this_section.comments[key] = comment_list
                 continue
